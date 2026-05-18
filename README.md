@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TaxEase
+
+A free, educational tax guide for international students in the US. Answer 5 quick questions and get a personalized filing guide with an AI assistant powered by Claude.
+
+> Built for the Claude Code May 2026 Hackathon. Free alternative to Sprintax — educational only, not professional tax advice.
+
+---
+
+## Who It's For
+
+International students on F-1, J-1, H-1B, and M-1 visas who need help understanding their US tax filing requirements.
+
+---
+
+## How It Works
+
+1. Answer 5 questions about your visa, country, state, and income
+2. Get a personalized plain-English tax guide
+3. Check your required forms and document checklist
+4. Ask the AI assistant follow-up questions
+
+---
+
+## Tech Stack
+
+- **Framework:** Next.js 16 + React 19
+- **Styling:** Tailwind CSS v4 + shadcn/ui
+- **AI:** Claude API (`claude-sonnet-4-6`) — streaming chat
+- **State:** localStorage (no database)
+
+---
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# 1. Install dependencies
+npm install
+
+# 2. Add your Anthropic API key
+cp .env.example .env.local
+# Edit .env.local and paste your key
+
+# 3. Run the dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Project Structure
 
-## Learn More
+```
+app/
+├── page.jsx              ← Landing page
+├── onboarding/page.jsx   ← 5-step form
+├── results/page.jsx      ← Guide + AI chat
+└── api/chat/route.js     ← Streaming Claude endpoint
 
-To learn more about Next.js, take a look at the following resources:
+lib/
+├── tax-logic.js          ← Rule engine (generateTaxGuide)
+├── prompts.js            ← Claude system prompt
+├── constants.js          ← Treaty countries, no-tax states
+└── utils.js              ← Utility helpers
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## For the Frontend Developer
 
-## Deploy on Vercel
+See [FRONTEND.md](./FRONTEND.md) — everything My teamate Nero will build
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+---
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Disclaimer
+
+This app is for **educational purposes only** and does not constitute professional tax advice. Always consult a licensed tax professional or your school's International Student Office for guidance specific to your situation.
