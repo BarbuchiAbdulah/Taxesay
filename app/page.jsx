@@ -9,7 +9,7 @@ export default function LandingPage() {
       <section className="px-4 py-20 text-center md:py-32">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight text-slate-900 mb-6">
-            Tax season doesn't have to be scary.
+            Tax season doesn&apos;t have to be scary.
           </h1>
           <p className="text-xl text-slate-600 mb-8 leading-relaxed">
             A free guide built for international students — personalized to your visa, country, and income.
