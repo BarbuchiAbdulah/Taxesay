@@ -1,7 +1,5 @@
 # TaxEase — Frontend Guide
 
-> Nero Part ( good luck with that )  — I made the backend (API, logic, types) is already built. You own 3 pages. I tryied to put everything you need here.
-
 ---
 
 ## Quick Start
@@ -35,14 +33,21 @@ npm run dev
 
 ```
 app/
-├── page.jsx              ← Landing page          (YOU BUILD)
+├── page.jsx              ← Landing page
+├── layout.jsx
+├── global.css      
 ├── onboarding/
-│   └── page.jsx          ← 5-question form       (YOU BUILD)
+│   └── page.jsx          ← 5-question form       
 └── results/
-    └── page.jsx          ← Results + AI chat     (YOU BUILD)
-```
+    └── page.jsx          ← Results + AI chat
 
-Everything else is done — do not edit files in `lib/`, `app/api/`, or `app/layout.jsx`.
+components/ui
+├── badge.tsx                     
+├── button.tsx
+├── card.tsx
+├── checkbox.tsx
+└── progress.tsx
+```
 
 ---
 
