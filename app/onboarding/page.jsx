@@ -7,15 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronRight, ChevronLeft, Search } from "lucide-react";
+import { getNames } from "country-list";
 
-const COUNTRIES = [
-  "Argentina", "Australia", "Austria", "Bangladesh", "Belgium", "Brazil", "Canada",
-  "China", "Colombia", "Czech Republic", "Denmark", "Egypt", "Finland", "France",
-  "Germany", "India", "Indonesia", "Ireland", "Italy", "Japan", "Mexico", "Netherlands",
-  "Nigeria", "Pakistan", "Peru", "Philippines", "Poland", "Russia", "South Africa",
-  "South Korea", "Spain", "Sweden", "Switzerland", "Taiwan", "Thailand", "Turkey",
-  "United Kingdom", "Vietnam",
-].sort();
+const COUNTRIES = getNames().sort();
 
 const STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
