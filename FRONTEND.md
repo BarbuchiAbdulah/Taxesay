@@ -1,5 +1,7 @@
 # TaxEase — Frontend Guide
 
+> Designed for the Claude Code May 2026 Hackathon.
+
 ---
 
 ## Quick Start
@@ -48,7 +50,6 @@ components/ui
 ├── checkbox.tsx
 └── progress.tsx
 ```
-
 ---
 
 ## Data Contracts
