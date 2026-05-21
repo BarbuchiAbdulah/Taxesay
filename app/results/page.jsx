@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { generateTaxGuide } from "@/lib/tax-logic.js";
+import { createClient } from "@/lib/supabase";
 import {
   CheckCircle,
   FileText,
@@ -13,13 +14,23 @@ import {
   AlertTriangle,
   ChevronRight,
   Loader2,
+  Upload,
+  Download,
+  Trash2,
+  ClipboardList,
 } from "lucide-react";
 
 export default function ResultsPage() {
   const router = useRouter();
+  const supabase = createClient();
+  const fileRef = useRef(null);
+
   const [profile, setProfile] = useState(null);
   const [guide, setGuide] = useState(null);
   const [checked, setChecked] = useState({});
+  const [user, setUser] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -29,14 +40,33 @@ export default function ResultsPage() {
   const chatBottomRef = useRef(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem("taxease_profile");
-    if (!stored) {
-      router.push("/onboarding");
-      return;
+    async function load() {
+      const stored = localStorage.getItem("taxease_profile");
+      if (!stored) {
+        router.push("/onboarding");
+        return;
+      }
+      const p = JSON.parse(stored);
+      setProfile(p);
+      setGuide(generateTaxGuide(p));
+
+      let currentUser = null;
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        currentUser = user;
+      }
+      setUser(currentUser);
+
+      if (currentUser) {
+        const [checklistRes, docsRes] = await Promise.all([
+          fetch("/api/checklist"),
+          fetch("/api/documents"),
+        ]);
+        if (checklistRes.ok) setChecked(await checklistRes.json());
+        if (docsRes.ok) setDocuments(await docsRes.json());
+      }
     }
-    const p = JSON.parse(stored);
-    setProfile(p);
-    setGuide(generateTaxGuide(p));
+    load();
   }, [router]);
 
   useEffect(() => {
@@ -44,6 +74,58 @@ export default function ResultsPage() {
   }, [messages, partial]);
 
   if (!guide || !profile) return null;
+
+  async function toggleChecked(docId) {
+    const next = !checked[docId];
+    setChecked((prev) => ({ ...prev, [docId]: next }));
+    if (user) {
+      await fetch("/api/checklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentName: docId, checked: next }),
+      });
+    }
+  }
+
+  async function handleUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert("File must be under 10 MB.");
+      return;
+    }
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/documents", { method: "POST", body: formData });
+    if (res.ok) {
+      const doc = await res.json();
+      setDocuments((prev) => [doc, ...prev]);
+    }
+    setUploading(false);
+    e.target.value = "";
+  }
+
+  async function handleDeleteDoc(id, storagePath) {
+    if (!confirm("Delete this document?")) return;
+    await fetch(
+      `/api/documents?id=${id}&path=${encodeURIComponent(storagePath)}`,
+      { method: "DELETE" }
+    );
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  }
+
+  async function handleDownloadDoc(storagePath, name) {
+    const res = await fetch(
+      `/api/documents?download=1&path=${encodeURIComponent(storagePath)}`
+    );
+    if (!res.ok) return;
+    const { url } = await res.json();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  }
 
   async function sendMessage(text) {
     const newMessages = [...messages, { role: "user", content: text }];
@@ -103,7 +185,7 @@ export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-background pb-24">
       <header className="sticky top-0 z-10 bg-background border-b border-border px-6 py-4 flex items-center justify-between">
-        <span className="font-bold text-foreground text-lg">TaxEase</span>
+        <span className="font-bold text-foreground text-lg">My Tax Guide</span>
         <button
           onClick={() => router.push("/onboarding")}
           className="text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -113,6 +195,7 @@ export default function ResultsPage() {
       </header>
 
       <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
+        {/* Profile */}
         <section className="bg-card border border-border rounded-2xl p-6">
           <h2 className="font-semibold text-foreground text-lg mb-4">Your Profile</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -131,13 +214,14 @@ export default function ResultsPage() {
           </div>
         </section>
 
+        {/* Tax Situation */}
         <section className="space-y-4">
           <h2 className="font-semibold text-foreground text-lg">Your Tax Situation</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">{guide.summary}</p>
 
           {guide.hasTreatyNote && (
             <div className="flex gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
-              <AlertTriangle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
               <p className="text-sm text-blue-800">
                 <strong>{profile.country}</strong> has a tax treaty with the United States. This may
                 reduce or eliminate taxes on certain types of income. See IRS Publication 901 for
@@ -151,6 +235,7 @@ export default function ResultsPage() {
           </div>
         </section>
 
+        {/* Forms */}
         <section className="space-y-3">
           <h2 className="font-semibold text-foreground text-lg">Forms You Need</h2>
           {guide.forms.length === 0 ? (
@@ -164,7 +249,7 @@ export default function ResultsPage() {
                 rel="noopener noreferrer"
                 className="flex items-start gap-4 bg-card border border-border rounded-xl p-4 hover:border-primary transition-colors group"
               >
-                <FileText className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                <FileText className="h-5 w-5 text-primary shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-foreground text-sm">{form.name}</span>
@@ -176,18 +261,19 @@ export default function ResultsPage() {
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">{form.description}</p>
                 </div>
-                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary flex-shrink-0 mt-0.5" />
+                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
               </a>
             ))
           )}
         </section>
 
+        {/* Step-by-Step */}
         <section className="space-y-3">
           <h2 className="font-semibold text-foreground text-lg">Step-by-Step Guide</h2>
           <div className="space-y-3">
             {guide.steps.map((s) => (
               <div key={s.step} className="flex gap-4 bg-card border border-border rounded-xl p-4">
-                <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">
+                <span className="shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">
                   {s.step}
                 </span>
                 <div>
@@ -199,13 +285,124 @@ export default function ResultsPage() {
           </div>
         </section>
 
+        {/* SpringTax Prep CTA */}
+        <section className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
+          <div className="flex items-start gap-4">
+            <ClipboardList className="h-7 w-7 text-blue-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h2 className="font-semibold text-blue-900">Ready to file with SpringTax?</h2>
+              <p className="text-sm text-blue-700 mt-1">
+                Fill in your prep sheet with all the answers SpringTax will ask — so you can fly through the filing process.
+              </p>
+              {user ? (
+                <button
+                  onClick={() => router.push("/springtax-prep")}
+                  className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Open SpringTax Prep
+                </button>
+              ) : (
+                <button
+                  onClick={() => router.push("/login?next=/springtax-prep")}
+                  className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+                >
+                  Log in to use SpringTax Prep
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Documents — upload section (logged-in only) */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-foreground text-lg">Your Documents</h2>
+            {user && (
+              <>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading}
+                  className="flex items-center gap-1.5 text-sm bg-primary text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploading ? "Uploading…" : "Upload"}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg"
+                  className="hidden"
+                  onChange={handleUpload}
+                />
+              </>
+            )}
+          </div>
+
+          {!user ? (
+            <div className="bg-muted rounded-xl px-4 py-3 text-sm text-muted-foreground">
+              <button
+                onClick={() => router.push("/login?next=/results")}
+                className="text-primary font-medium hover:underline"
+              >
+                Log in
+              </button>{" "}
+              to upload and save your tax documents (W-2, 1042-S, I-20, etc.)
+            </div>
+          ) : documents.length === 0 ? (
+            <div
+              className="text-center py-6 border-2 border-dashed border-border rounded-xl cursor-pointer hover:bg-muted transition-colors"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                Upload your W-2, 1042-S, I-20, and more
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, JPG · max 10 MB</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-xl"
+                >
+                  <FileText className="h-5 w-5 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{doc.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {(doc.size_bytes / 1024).toFixed(0)} KB ·{" "}
+                      {new Date(doc.uploaded_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleDownloadDoc(doc.storage_path, doc.name)}
+                      className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteDoc(doc.id, doc.storage_path)}
+                      className="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Document Checklist */}
         <section className="space-y-3">
           <h2 className="font-semibold text-foreground text-lg">Document Checklist</h2>
           <div className="space-y-2">
             {guide.documents.map((doc) => (
               <button
                 key={doc.id}
-                onClick={() => setChecked((prev) => ({ ...prev, [doc.id]: !prev[doc.id] }))}
+                onClick={() => toggleChecked(doc.id)}
                 className={`w-full flex items-start gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${
                   checked[doc.id]
                     ? "border-green-400 bg-green-50"
@@ -213,13 +410,17 @@ export default function ResultsPage() {
                 }`}
               >
                 <CheckCircle
-                  className={`h-5 w-5 flex-shrink-0 mt-0.5 transition-colors ${
+                  className={`h-5 w-5 shrink-0 mt-0.5 transition-colors ${
                     checked[doc.id] ? "text-green-600" : "text-muted-foreground"
                   }`}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium ${checked[doc.id] ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                    <span
+                      className={`text-sm font-medium ${
+                        checked[doc.id] ? "line-through text-muted-foreground" : "text-foreground"
+                      }`}
+                    >
                       {doc.label}
                     </span>
                     {doc.required && (
@@ -242,6 +443,7 @@ export default function ResultsPage() {
         </p>
       </div>
 
+      {/* Chat Button */}
       <button
         onClick={() => setChatOpen(true)}
         className="fixed bottom-6 right-6 flex items-center gap-2 bg-primary text-primary-foreground px-5 py-3 rounded-full shadow-lg font-semibold text-sm hover:opacity-90 transition-opacity z-20"
@@ -250,6 +452,7 @@ export default function ResultsPage() {
         Ask TaxEase AI
       </button>
 
+      {/* Chat Modal */}
       {chatOpen && (
         <div className="fixed inset-0 z-30 flex items-end sm:items-center justify-center sm:justify-end sm:p-6">
           <div
@@ -287,7 +490,7 @@ export default function ResultsPage() {
                         onClick={() => sendMessage(q)}
                         className="w-full text-left px-3 py-2 rounded-lg border border-border text-xs hover:bg-muted transition-colors flex items-center gap-2"
                       >
-                        <ChevronRight className="h-3 w-3 text-primary flex-shrink-0" />
+                        <ChevronRight className="h-3 w-3 text-primary shrink-0" />
                         {q}
                       </button>
                     ))}
@@ -346,7 +549,7 @@ export default function ResultsPage() {
               <button
                 type="submit"
                 disabled={!input.trim() || streaming}
-                className="flex-shrink-0 bg-primary text-primary-foreground rounded-lg px-3 py-2 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                className="shrink-0 bg-primary text-primary-foreground rounded-lg px-3 py-2 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
               >
                 <Send className="h-4 w-4" />
               </button>

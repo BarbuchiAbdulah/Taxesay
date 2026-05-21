@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronRight, ChevronLeft } from "lucide-react";
+import { createClient } from "@/lib/supabase";
 
 const SELECTED_CLS = "border-primary bg-blue-50 text-primary";
 const UNSELECTED_CLS = "border-border bg-background text-foreground hover:bg-muted";
@@ -116,6 +117,7 @@ function CountryPicker({ value, onChange }) {
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const supabase = createClient();
   const [step, setStep] = useState(1);
   const [profile, setProfile] = useState({
     country: "",
@@ -156,11 +158,21 @@ export default function OnboardingPage() {
     return false;
   }
 
-  function handleNext() {
+  async function handleNext() {
     if (step < TOTAL_STEPS) {
       setStep((s) => s + 1);
     } else {
       localStorage.setItem("taxease_profile", JSON.stringify(profile));
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await fetch("/api/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(profile),
+          });
+        }
+      }
       router.push("/results");
     }
   }
