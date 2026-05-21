@@ -1,46 +1,136 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { generateTaxGuide } from "@/lib/tax-logic.js";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, FileText, MessageCircle, ExternalLink, Send, X, Loader } from "lucide-react";
+import { createClient } from "@/lib/supabase";
+import {
+  CheckCircle,
+  FileText,
+  MessageCircle,
+  X,
+  Send,
+  ExternalLink,
+  AlertTriangle,
+  ChevronRight,
+  Loader2,
+  Upload,
+  Download,
+  Trash2,
+  ClipboardList,
+} from "lucide-react";
 
 export default function ResultsPage() {
   const router = useRouter();
+  const supabase = createClient();
+  const fileRef = useRef(null);
+
   const [profile, setProfile] = useState(null);
   const [guide, setGuide] = useState(null);
-  const [checkedDocs, setCheckedDocs] = useState({});
+  const [checked, setChecked] = useState({});
+  const [user, setUser] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
   const [partial, setPartial] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [chatInput, setChatInput] = useState("");
+  const chatBottomRef = useRef(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem("taxease_profile");
-    if (!stored) {
-      router.push("/onboarding");
-      return;
+    async function load() {
+      const stored = localStorage.getItem("taxease_profile");
+      if (!stored) {
+        router.push("/onboarding");
+        return;
+      }
+      const p = JSON.parse(stored);
+      setProfile(p);
+      setGuide(generateTaxGuide(p));
+
+      let currentUser = null;
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        currentUser = user;
+      }
+      setUser(currentUser);
+
+      if (currentUser) {
+        const [checklistRes, docsRes] = await Promise.all([
+          fetch("/api/checklist"),
+          fetch("/api/documents"),
+        ]);
+        if (checklistRes.ok) setChecked(await checklistRes.json());
+        if (docsRes.ok) setDocuments(await docsRes.json());
+      }
     }
-    const p = JSON.parse(stored);
-    setProfile(p);
-    setGuide(generateTaxGuide(p));
+    load();
   }, [router]);
 
-  if (!guide) return null;
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [messages, partial]);
 
-  const sendMessage = async (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
+  if (!guide || !profile) return null;
 
-    const userText = chatInput;
-    setChatInput("");
-    const newMessages = [...messages, { role: "user", content: userText }];
+  async function toggleChecked(docId) {
+    const next = !checked[docId];
+    setChecked((prev) => ({ ...prev, [docId]: next }));
+    if (user) {
+      await fetch("/api/checklist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentName: docId, checked: next }),
+      });
+    }
+  }
+
+  async function handleUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert("File must be under 10 MB.");
+      return;
+    }
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/documents", { method: "POST", body: formData });
+    if (res.ok) {
+      const doc = await res.json();
+      setDocuments((prev) => [doc, ...prev]);
+    }
+    setUploading(false);
+    e.target.value = "";
+  }
+
+  async function handleDeleteDoc(id, storagePath) {
+    if (!confirm("Delete this document?")) return;
+    await fetch(
+      `/api/documents?id=${id}&path=${encodeURIComponent(storagePath)}`,
+      { method: "DELETE" }
+    );
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  }
+
+  async function handleDownloadDoc(storagePath, name) {
+    const res = await fetch(
+      `/api/documents?download=1&path=${encodeURIComponent(storagePath)}`
+    );
+    if (!res.ok) return;
+    const { url } = await res.json();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  }
+
+  async function sendMessage(text) {
+    const newMessages = [...messages, { role: "user", content: text }];
     setMessages(newMessages);
+    setInput("");
     setStreaming(true);
     setPartial("");
 
@@ -54,267 +144,417 @@ export default function ResultsPage() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let full = "";
+      let streamDone = false;
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        const lines = decoder.decode(value).split("\n");
+        const lines = decoder.decode(value, { stream: true }).split("\n");
+        let chunkUpdated = false;
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
-          if (data === "[DONE]") break;
+          if (data === "[DONE]") { streamDone = true; break; }
           try {
             const parsed = JSON.parse(data);
-            if (parsed.text) {
-              full += parsed.text;
-              setPartial(full);
-            }
+            if (parsed.text) { full += parsed.text; chunkUpdated = true; }
+            if (parsed.error) { full = "Sorry, something went wrong. Please try again."; chunkUpdated = true; }
           } catch {}
         }
+        if (chunkUpdated) setPartial(full);
       }
 
-      setMessages(prev => [...prev, { role: "assistant", content: full }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: full }]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Sorry, I couldn't reach the server. Please try again." },
+      ]);
+    } finally {
       setStreaming(false);
-    } catch (error) {
-      console.error("Chat error:", error);
-      setStreaming(false);
+      setPartial("");
     }
-  };
+  }
+
+  function handleSend(e) {
+    e.preventDefault();
+    if (!input.trim() || streaming) return;
+    sendMessage(input.trim());
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white pb-20">
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-slate-900 mb-2">Your Tax Guide</h1>
-          <p className="text-slate-600">Personalized results for your tax situation</p>
-        </div>
-
-        {/* Profile Summary Card */}
-        <Card className="mb-8 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-              <div>
-                <p className="text-sm text-slate-600 mb-1">Visa Type</p>
-                <p className="font-semibold text-slate-900">{profile.visaType}</p>
-              </div>
-              <div>
-                <p className="text-sm text-slate-600 mb-1">Country</p>
-                <p className="font-semibold text-slate-900">{profile.country}</p>
-              </div>
-              <div>
-                <p className="text-sm text-slate-600 mb-1">State</p>
-                <p className="font-semibold text-slate-900">{profile.state}</p>
-              </div>
-              <div>
-                <p className="text-sm text-slate-600 mb-1">Tax Year</p>
-                <p className="font-semibold text-slate-900">{profile.taxYear}</p>
-              </div>
-              <div>
-                <p className="text-sm text-slate-600 mb-1">Residency Status</p>
-                <p className="font-semibold text-slate-900">{guide.residencyStatus}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Your Tax Situation */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-blue-600" />
-              Your Tax Situation
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-slate-700 leading-relaxed">{guide.summary}</p>
-            {guide.hasTreatyNote && (
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-sm font-semibold text-green-900 mb-1">✓ Treaty Country</p>
-                <p className="text-sm text-green-800">
-                  {profile.country} has a US tax treaty that may affect your filing requirements.
-                </p>
-              </div>
-            )}
-            {guide.stateNote && (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                <p className="text-sm text-amber-900">{guide.stateNote}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Forms You Need */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-600" />
-              Forms You Need
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {guide.forms.map(form => (
-                <div key={form.id} className="flex items-start justify-between p-4 border border-slate-200 rounded-lg hover:bg-slate-50">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-slate-900 flex items-center gap-2 mb-1">
-                      {form.name}
-                      {form.required && <Badge className="bg-red-600">Required</Badge>}
-                    </h3>
-                    <p className="text-sm text-slate-600">{form.description}</p>
-                  </div>
-                  <a
-                    href={form.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-4 flex-shrink-0"
-                  >
-                    <Button variant="outline" size="sm" className="gap-2">
-                      View <ExternalLink className="w-3 h-3" />
-                    </Button>
-                  </a>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Step-by-Step Guide */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Step-by-Step Guide</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ol className="space-y-6">
-              {guide.steps.map(step => (
-                <li key={step.step} className="flex gap-4">
-                  <div className="flex-shrink-0 w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-semibold">
-                    {step.step}
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 mb-1">{step.title}</h3>
-                    <p className="text-slate-600 text-sm">{step.description}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </CardContent>
-        </Card>
-
-        {/* Document Checklist */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Document Checklist</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {guide.documents.map(doc => (
-                <div
-                  key={doc.id}
-                  className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-                  onClick={() => setCheckedDocs(prev => ({ ...prev, [doc.id]: !prev[doc.id] }))}
-                >
-                  <Checkbox
-                    checked={checkedDocs[doc.id] || false}
-                    onChange={() => {}}
-                  />
-                  <div className="flex-1">
-                    <label className="cursor-pointer font-medium text-slate-900">
-                      {doc.label}
-                      {doc.required && <Badge className="ml-2 bg-red-600">Required</Badge>}
-                    </label>
-                    <p className="text-sm text-slate-600 mt-1">{doc.description}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Disclaimer */}
-        <div className="p-6 bg-slate-100 rounded-lg mb-8 border border-slate-300">
-          <p className="text-sm text-slate-700">
-            <strong>Disclaimer:</strong> This tool is for educational purposes only and does not constitute professional tax advice. 
-            Always consult a licensed tax professional or your school's International Student Office for guidance specific to your situation.
-          </p>
-        </div>
-      </div>
-
-      {/* Floating Chat Button */}
-      {!chatOpen && (
+    <div className="min-h-screen bg-background pb-24">
+      <header className="sticky top-0 z-10 bg-background border-b border-border px-6 py-4 flex items-center justify-between">
+        <span className="font-bold text-foreground text-lg">My Tax Guide</span>
         <button
-          onClick={() => setChatOpen(true)}
-          className="fixed bottom-8 right-8 w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg flex items-center justify-center transition transform hover:scale-110"
+          onClick={() => router.push("/onboarding")}
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <MessageCircle className="w-6 h-6" />
+          Start over
         </button>
-      )}
+      </header>
 
-      {/* Chat Panel */}
-      {chatOpen && (
-        <div className="fixed bottom-0 right-0 w-full md:w-96 h-screen md:h-96 bg-white rounded-t-lg md:rounded-lg shadow-xl border border-slate-300 flex flex-col">
-          {/* Chat Header */}
-          <div className="flex items-center justify-between p-4 border-b border-slate-200 bg-blue-600 text-white rounded-t-lg md:rounded-t-lg">
-            <h3 className="font-semibold">Tax Guide Assistant</h3>
-            <button onClick={() => setChatOpen(false)} className="hover:bg-blue-700 p-1 rounded">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.length === 0 && (
-              <div className="text-center text-slate-500 text-sm py-8">
-                <p className="mb-2">👋 Hi! I'm here to help.</p>
-                <p>Ask me any questions about your taxes.</p>
+      <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
+        {/* Profile */}
+        <section className="bg-card border border-border rounded-2xl p-6">
+          <h2 className="font-semibold text-foreground text-lg mb-4">Your Profile</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            {[
+              { label: "Visa", value: profile.visaType },
+              { label: "Country", value: profile.country },
+              { label: "State", value: profile.state },
+              { label: "Tax Year", value: profile.taxYear },
+              { label: "Residency", value: guide.residencyStatus },
+            ].map(({ label, value }) => (
+              <div key={label}>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">{label}</p>
+                <p className="font-medium text-foreground text-sm mt-0.5">{value}</p>
               </div>
-            )}
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            ))}
+          </div>
+        </section>
+
+        {/* Tax Situation */}
+        <section className="space-y-4">
+          <h2 className="font-semibold text-foreground text-lg">Your Tax Situation</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">{guide.summary}</p>
+
+          {guide.hasTreatyNote && (
+            <div className="flex gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+              <AlertTriangle className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+              <p className="text-sm text-blue-800">
+                <strong>{profile.country}</strong> has a tax treaty with the United States. This may
+                reduce or eliminate taxes on certain types of income. See IRS Publication 901 for
+                details.
+              </p>
+            </div>
+          )}
+
+          <div className="bg-muted rounded-xl px-4 py-3">
+            <p className="text-sm text-muted-foreground">{guide.stateNote}</p>
+          </div>
+        </section>
+
+        {/* Forms */}
+        <section className="space-y-3">
+          <h2 className="font-semibold text-foreground text-lg">Forms You Need</h2>
+          {guide.forms.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No federal income tax forms required.</p>
+          ) : (
+            guide.forms.map((form) => (
+              <a
+                key={form.id}
+                href={form.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-start gap-4 bg-card border border-border rounded-xl p-4 hover:border-primary transition-colors group"
               >
-                <div
-                  className={`max-w-xs px-4 py-2 rounded-lg text-sm ${
-                    msg.role === "user"
-                      ? "bg-blue-600 text-white"
-                      : "bg-slate-100 text-slate-900"
-                  }`}
-                >
-                  {msg.content}
+                <FileText className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground text-sm">{form.name}</span>
+                    {form.required && (
+                      <span className="text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded font-medium">
+                        Required
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{form.description}</p>
+                </div>
+                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+              </a>
+            ))
+          )}
+        </section>
+
+        {/* Step-by-Step */}
+        <section className="space-y-3">
+          <h2 className="font-semibold text-foreground text-lg">Step-by-Step Guide</h2>
+          <div className="space-y-3">
+            {guide.steps.map((s) => (
+              <div key={s.step} className="flex gap-4 bg-card border border-border rounded-xl p-4">
+                <span className="shrink-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center">
+                  {s.step}
+                </span>
+                <div>
+                  <p className="font-medium text-foreground text-sm">{s.title}</p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{s.description}</p>
                 </div>
               </div>
             ))}
-            {streaming && (
-              <div className="flex justify-start">
-                <div className="bg-slate-100 text-slate-900 px-4 py-2 rounded-lg max-w-xs">
-                  <p className="text-sm">{partial || <Loader className="w-4 h-4 animate-spin" />}</p>
-                </div>
-              </div>
+          </div>
+        </section>
+
+        {/* SpringTax Prep CTA */}
+        <section className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
+          <div className="flex items-start gap-4">
+            <ClipboardList className="h-7 w-7 text-blue-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h2 className="font-semibold text-blue-900">Ready to file with SpringTax?</h2>
+              <p className="text-sm text-blue-700 mt-1">
+                Fill in your prep sheet with all the answers SpringTax will ask — so you can fly through the filing process.
+              </p>
+              {user ? (
+                <button
+                  onClick={() => router.push("/springtax-prep")}
+                  className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+                >
+                  <ClipboardList className="h-4 w-4" />
+                  Open SpringTax Prep
+                </button>
+              ) : (
+                <button
+                  onClick={() => router.push("/login?next=/springtax-prep")}
+                  className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+                >
+                  Log in to use SpringTax Prep
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Documents — upload section (logged-in only) */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-foreground text-lg">Your Documents</h2>
+            {user && (
+              <>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading}
+                  className="flex items-center gap-1.5 text-sm bg-primary text-primary-foreground px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploading ? "Uploading…" : "Upload"}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg"
+                  className="hidden"
+                  onChange={handleUpload}
+                />
+              </>
             )}
           </div>
 
-          {/* Chat Input */}
-          <form onSubmit={sendMessage} className="border-t border-slate-200 p-4">
-            <div className="flex gap-2">
+          {!user ? (
+            <div className="bg-muted rounded-xl px-4 py-3 text-sm text-muted-foreground">
+              <button
+                onClick={() => router.push("/login?next=/results")}
+                className="text-primary font-medium hover:underline"
+              >
+                Log in
+              </button>{" "}
+              to upload and save your tax documents (W-2, 1042-S, I-20, etc.)
+            </div>
+          ) : documents.length === 0 ? (
+            <div
+              className="text-center py-6 border-2 border-dashed border-border rounded-xl cursor-pointer hover:bg-muted transition-colors"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                Upload your W-2, 1042-S, I-20, and more
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, JPG · max 10 MB</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-xl"
+                >
+                  <FileText className="h-5 w-5 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{doc.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {(doc.size_bytes / 1024).toFixed(0)} KB ·{" "}
+                      {new Date(doc.uploaded_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleDownloadDoc(doc.storage_path, doc.name)}
+                      className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteDoc(doc.id, doc.storage_path)}
+                      className="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Document Checklist */}
+        <section className="space-y-3">
+          <h2 className="font-semibold text-foreground text-lg">Document Checklist</h2>
+          <div className="space-y-2">
+            {guide.documents.map((doc) => (
+              <button
+                key={doc.id}
+                onClick={() => toggleChecked(doc.id)}
+                className={`w-full flex items-start gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${
+                  checked[doc.id]
+                    ? "border-green-400 bg-green-50"
+                    : "border-border bg-card hover:bg-muted"
+                }`}
+              >
+                <CheckCircle
+                  className={`h-5 w-5 shrink-0 mt-0.5 transition-colors ${
+                    checked[doc.id] ? "text-green-600" : "text-muted-foreground"
+                  }`}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-sm font-medium ${
+                        checked[doc.id] ? "line-through text-muted-foreground" : "text-foreground"
+                      }`}
+                    >
+                      {doc.label}
+                    </span>
+                    {doc.required && (
+                      <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                        Required
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{doc.description}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <p className="text-xs text-muted-foreground text-center leading-relaxed border-t border-border pt-6">
+          This tool is for educational purposes only and does not constitute professional tax
+          advice. Please consult a licensed tax professional or your school&apos;s International
+          Student Office for guidance specific to your situation.
+        </p>
+      </div>
+
+      {/* Chat Button */}
+      <button
+        onClick={() => setChatOpen(true)}
+        className="fixed bottom-6 right-6 flex items-center gap-2 bg-primary text-primary-foreground px-5 py-3 rounded-full shadow-lg font-semibold text-sm hover:opacity-90 transition-opacity z-20"
+      >
+        <MessageCircle className="h-5 w-5" />
+        Ask TaxEase AI
+      </button>
+
+      {/* Chat Modal */}
+      {chatOpen && (
+        <div className="fixed inset-0 z-30 flex items-end sm:items-center justify-center sm:justify-end sm:p-6">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => setChatOpen(false)}
+          />
+
+          <div className="relative w-full sm:w-[420px] h-[85vh] sm:h-[600px] bg-background rounded-t-2xl sm:rounded-2xl border border-border shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <div className="flex items-center gap-2">
+                <MessageCircle className="h-5 w-5 text-primary" />
+                <span className="font-semibold text-foreground text-sm">TaxEase AI</span>
+              </div>
+              <button
+                onClick={() => setChatOpen(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+              {messages.length === 0 && (
+                <div className="text-center text-sm text-muted-foreground mt-8">
+                  <p className="font-medium text-foreground mb-2">Hi! I&apos;m TaxEase AI.</p>
+                  <p>Ask me anything about your tax situation.</p>
+                  <div className="mt-4 space-y-2">
+                    {[
+                      "Do I need to file if I made very little?",
+                      "What is Form 8843?",
+                      "When is the filing deadline?",
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => sendMessage(q)}
+                        className="w-full text-left px-3 py-2 rounded-lg border border-border text-xs hover:bg-muted transition-colors flex items-center gap-2"
+                      >
+                        <ChevronRight className="h-3 w-3 text-primary shrink-0" />
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+                      m.role === "user"
+                        ? "bg-primary text-primary-foreground rounded-br-sm"
+                        : "bg-muted text-foreground rounded-bl-sm"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+
+              {streaming && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted text-foreground">
+                    {partial ? (
+                      <div className="px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap">
+                        {partial}
+                        <span className="inline-block w-1.5 h-4 bg-muted-foreground/50 ml-0.5 animate-pulse rounded-sm" />
+                      </div>
+                    ) : (
+                      <div className="px-4 py-3">
+                        <Loader2 className="h-4 w-4 text-muted-foreground animate-spin" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div ref={chatBottomRef} />
+            </div>
+
+            <form
+              onSubmit={handleSend}
+              className="px-4 py-3 border-t border-border flex gap-2"
+            >
               <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask a question..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask a question…"
                 disabled={streaming}
-                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                className="flex-1 border border-input rounded-lg px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={streaming || !chatInput.trim()}
-                className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg p-2 transition"
+                disabled={!input.trim() || streaming}
+                className="shrink-0 bg-primary text-primary-foreground rounded-lg px-3 py-2 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
               >
-                <Send className="w-4 h-4" />
+                <Send className="h-4 w-4" />
               </button>
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
       )}
     </div>

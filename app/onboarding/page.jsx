@@ -1,22 +1,46 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
-import { ChevronRight, ChevronLeft, Search } from "lucide-react";
-import { getNames } from "country-list";
+import { ChevronRight, ChevronLeft } from "lucide-react";
+import { createClient } from "@/lib/supabase";
 
-const COUNTRIES = getNames().sort();
+const SELECTED_CLS = "border-primary bg-blue-50 text-primary";
+const UNSELECTED_CLS = "border-border bg-background text-foreground hover:bg-muted";
+
+const COUNTRIES = [
+  "Afghanistan","Albania","Algeria","Argentina","Armenia","Australia","Austria",
+  "Azerbaijan","Bangladesh","Belarus","Belgium","Bolivia","Bosnia and Herzegovina",
+  "Brazil","Bulgaria","Cambodia","Cameroon","Canada","Chile","China","Colombia",
+  "Costa Rica","Croatia","Cuba","Czech Republic","Denmark","Ecuador","Egypt",
+  "El Salvador","Ethiopia","Finland","France","Georgia","Germany","Ghana","Greece",
+  "Guatemala","Honduras","Hong Kong","Hungary","India","Indonesia","Iran","Iraq",
+  "Ireland","Israel","Italy","Jamaica","Japan","Jordan","Kazakhstan","Kenya",
+  "Kuwait","Kyrgyzstan","Lebanon","Libya","Malaysia","Mexico","Moldova","Mongolia",
+  "Morocco","Myanmar","Nepal","Netherlands","New Zealand","Nicaragua","Nigeria",
+  "North Korea","Norway","Oman","Pakistan","Panama","Peru","Philippines","Poland",
+  "Portugal","Qatar","Romania","Russia","Saudi Arabia","Senegal","Serbia",
+  "Singapore","Slovakia","Slovenia","Somalia","South Africa","South Korea","Spain",
+  "Sri Lanka","Sudan","Sweden","Switzerland","Syria","Taiwan","Tajikistan",
+  "Tanzania","Thailand","Tunisia","Turkey","Turkmenistan","Uganda","Ukraine",
+  "United Arab Emirates","United Kingdom","Uruguay","Uzbekistan","Venezuela",
+  "Vietnam","Yemen","Zimbabwe",
+];
 
 const STATES = [
-  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+  ["AL","Alabama"],["AK","Alaska"],["AZ","Arizona"],["AR","Arkansas"],
+  ["CA","California"],["CO","Colorado"],["CT","Connecticut"],["DE","Delaware"],
+  ["DC","District of Columbia"],["FL","Florida"],["GA","Georgia"],["HI","Hawaii"],
+  ["ID","Idaho"],["IL","Illinois"],["IN","Indiana"],["IA","Iowa"],["KS","Kansas"],
+  ["KY","Kentucky"],["LA","Louisiana"],["ME","Maine"],["MD","Maryland"],
+  ["MA","Massachusetts"],["MI","Michigan"],["MN","Minnesota"],["MS","Mississippi"],
+  ["MO","Missouri"],["MT","Montana"],["NE","Nebraska"],["NV","Nevada"],
+  ["NH","New Hampshire"],["NJ","New Jersey"],["NM","New Mexico"],["NY","New York"],
+  ["NC","North Carolina"],["ND","North Dakota"],["OH","Ohio"],["OK","Oklahoma"],
+  ["OR","Oregon"],["PA","Pennsylvania"],["RI","Rhode Island"],["SC","South Carolina"],
+  ["SD","South Dakota"],["TN","Tennessee"],["TX","Texas"],["UT","Utah"],
+  ["VT","Vermont"],["VA","Virginia"],["WA","Washington"],["WV","West Virginia"],
+  ["WI","Wisconsin"],["WY","Wyoming"],
 ];
 
 const INCOME_OPTIONS = [
@@ -26,245 +50,268 @@ const INCOME_OPTIONS = [
   { value: "no_income", label: "No US Income" },
 ];
 
+const TOTAL_STEPS = 5;
+
+function CountryPicker({ value, onChange }) {
+  const [query, setQuery] = useState(value);
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const filtered = useMemo(
+    () => query.trim()
+      ? COUNTRIES.filter((c) => c.toLowerCase().includes(query.toLowerCase()))
+      : COUNTRIES,
+    [query]
+  );
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        if (!COUNTRIES.includes(query)) setQuery(value);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [query, value]);
+
+  function select(country) {
+    setQuery(country);
+    onChange(country);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); onChange(""); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search country…"
+        autoComplete="off"
+        className="w-full border border-input rounded-lg px-4 py-3 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+      {open && filtered.length > 0 && (
+        <ul className="absolute z-50 mt-1 w-full bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto">
+          {filtered.map((c) => (
+            <li
+              key={c}
+              onMouseDown={(e) => { e.preventDefault(); select(c); }}
+              className={`px-4 py-2.5 text-sm cursor-pointer hover:bg-muted transition-colors ${
+                c === value ? "bg-blue-50 text-primary font-medium" : "text-foreground"
+              }`}
+            >
+              {c}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && filtered.length === 0 && (
+        <div className="absolute z-50 mt-1 w-full bg-background border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-muted-foreground">
+          No countries match &quot;{query}&quot;
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function OnboardingPage() {
   const router = useRouter();
+  const supabase = createClient();
   const [step, setStep] = useState(1);
   const [profile, setProfile] = useState({
     country: "",
     visaType: "",
-    taxYear: "2024",
+    taxYear: "",
     state: "",
     incomeSources: [],
   });
 
-  const [countrySearch, setCountrySearch] = useState("");
-  const filteredCountries = useMemo(() => {
-    return COUNTRIES.filter(c => c.toLowerCase().includes(countrySearch.toLowerCase()));
-  }, [countrySearch]);
+  const progress = ((step - 1) / TOTAL_STEPS) * 100;
 
-  const progress = (step / 5) * 100;
+  function set(field, value) {
+    setProfile((prev) => ({ ...prev, [field]: value }));
+  }
 
-  const handleNext = () => {
-    if (step < 5) setStep(step + 1);
-  };
+  function toggleIncome(value) {
+    setProfile((prev) => {
+      const current = prev.incomeSources;
+      if (value === "no_income") {
+        return { ...prev, incomeSources: current.includes("no_income") ? [] : ["no_income"] };
+      }
+      const without = current.filter((v) => v !== "no_income");
+      return {
+        ...prev,
+        incomeSources: without.includes(value)
+          ? without.filter((v) => v !== value)
+          : [...without, value],
+      };
+    });
+  }
 
-  const handlePrev = () => {
-    if (step > 1) setStep(step - 1);
-  };
+  function canAdvance() {
+    if (step === 1) return profile.country.trim() !== "";
+    if (step === 2) return profile.visaType !== "";
+    if (step === 3) return profile.taxYear !== "";
+    if (step === 4) return profile.state !== "";
+    if (step === 5) return profile.incomeSources.length > 0;
+    return false;
+  }
 
-  const handleFinish = () => {
-    if (profile.country && profile.visaType && profile.state && profile.incomeSources.length > 0) {
+  async function handleNext() {
+    if (step < TOTAL_STEPS) {
+      setStep((s) => s + 1);
+    } else {
       localStorage.setItem("taxease_profile", JSON.stringify(profile));
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await fetch("/api/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(profile),
+          });
+        }
+      }
       router.push("/results");
     }
-  };
-
-  const updateIncomeSources = (value) => {
-    setProfile(prev => {
-      const sources = prev.incomeSources.includes(value)
-        ? prev.incomeSources.filter(s => s !== value)
-        : [...prev.incomeSources, value];
-      return { ...prev, incomeSources: sources };
-    });
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 px-4 py-12">
-      <div className="max-w-2xl mx-auto">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            Let's personalize your tax guide
-          </h1>
-          <p className="text-slate-600">Step {step} of 5</p>
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center px-4">
+      <div className="w-full max-w-lg">
+        <div className="mb-8 text-center">
+          <h1 className="text-2xl font-bold text-foreground">TaxEase</h1>
+          <p className="text-sm text-muted-foreground mt-1">Step {step} of {TOTAL_STEPS}</p>
         </div>
 
-        {/* Progress Bar */}
-        <div className="mb-8">
-          <Progress value={progress} className="h-2" />
+        <div className="w-full h-2 bg-muted rounded-full mb-10 overflow-hidden">
+          <div
+            className="h-full bg-primary rounded-full transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          />
         </div>
 
-        {/* Step Content */}
-        <Card className="shadow-lg">
-          <CardHeader>
-            <CardTitle className="text-2xl">
-              {step === 1 && "Where are you from?"}
-              {step === 2 && "What's your visa type?"}
-              {step === 3 && "Which tax year?"}
-              {step === 4 && "What state are you in?"}
-              {step === 5 && "Tell us about your income"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Step 1: Country */}
-            {step === 1 && (
-              <div className="space-y-4">
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                    <Search className="w-4 h-4 text-slate-400" />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="Search countries..."
-                    value={countrySearch}
-                    onChange={(e) => setCountrySearch(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="max-h-60 overflow-y-auto space-y-2">
-                  {filteredCountries.map(country => (
+        <div className="bg-card border border-border rounded-2xl p-8 shadow-sm">
+          {step === 1 && (
+            <div>
+              <h2 className="text-xl font-semibold text-foreground mb-1">Where are you from?</h2>
+              <p className="text-sm text-muted-foreground mb-6">Select your country of origin</p>
+              <CountryPicker
+                value={profile.country}
+                onChange={(v) => set("country", v)}
+              />
+              {profile.country && (
+                <p className="mt-2 text-sm text-primary font-medium">✓ {profile.country}</p>
+              )}
+            </div>
+          )}
+
+          {step === 2 && (
+            <div>
+              <h2 className="text-xl font-semibold text-foreground mb-1">What is your visa type?</h2>
+              <p className="text-sm text-muted-foreground mb-6">Select your current US visa</p>
+              <div className="grid grid-cols-1 gap-3">
+                {["F-1", "J-1", "H-1B", "M-1", "Other"].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => set("visaType", v)}
+                    className={`w-full text-left px-4 py-3 rounded-lg border text-sm font-medium transition-colors ${profile.visaType === v ? SELECTED_CLS : UNSELECTED_CLS}`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div>
+              <h2 className="text-xl font-semibold text-foreground mb-1">Which tax year?</h2>
+              <p className="text-sm text-muted-foreground mb-6">Select the year you are filing for</p>
+              <div className="grid grid-cols-3 gap-3">
+                {["2025", "2024", "2023"].map((y) => (
+                  <button
+                    key={y}
+                    onClick={() => set("taxYear", y)}
+                    className={`py-3 rounded-lg border text-sm font-semibold transition-colors ${profile.taxYear === y ? SELECTED_CLS : UNSELECTED_CLS}`}
+                  >
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === 4 && (
+            <div>
+              <h2 className="text-xl font-semibold text-foreground mb-1">Which US state do you live in?</h2>
+              <p className="text-sm text-muted-foreground mb-6">Used to determine state filing requirements</p>
+              <select
+                value={profile.state}
+                onChange={(e) => set("state", e.target.value)}
+                className="w-full border border-input rounded-lg px-4 py-3 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Select a state…</option>
+                {STATES.map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name} ({code})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {step === 5 && (
+            <div>
+              <h2 className="text-xl font-semibold text-foreground mb-1">What are your income sources?</h2>
+              <p className="text-sm text-muted-foreground mb-6">Select all that apply for this tax year</p>
+              <div className="grid grid-cols-1 gap-3">
+                {INCOME_OPTIONS.map((opt) => {
+                  const checked = profile.incomeSources.includes(opt.value);
+                  return (
                     <button
-                      key={country}
-                      onClick={() => {
-                        setProfile(prev => ({ ...prev, country }));
-                        setCountrySearch("");
-                        handleNext();
-                      }}
-                      className={`w-full text-left px-4 py-2 rounded-lg border transition ${
-                        profile.country === country
-                          ? "bg-blue-50 border-blue-300"
-                          : "border-slate-200 hover:bg-slate-50"
-                      }`}
+                      key={opt.value}
+                      onClick={() => toggleIncome(opt.value)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg border text-sm font-medium transition-colors text-left ${checked ? SELECTED_CLS : UNSELECTED_CLS}`}
                     >
-                      {country}
+                      <span
+                        className={`w-5 h-5 rounded shrink-0 flex items-center justify-center border-2 transition-colors ${
+                          checked ? "bg-primary border-primary" : "border-muted-foreground"
+                        }`}
+                      >
+                        {checked && (
+                          <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </span>
+                      {opt.label}
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            )}
-
-            {/* Step 2: Visa Type */}
-            {step === 2 && (
-              <div className="space-y-3">
-                {["F-1", "J-1", "H-1B", "M-1", "Other"].map(visa => (
-                  <button
-                    key={visa}
-                    onClick={() => {
-                      setProfile(prev => ({ ...prev, visaType: visa }));
-                      handleNext();
-                    }}
-                    className={`w-full text-left px-4 py-3 rounded-lg border-2 transition font-medium ${
-                      profile.visaType === visa
-                        ? "bg-blue-50 border-blue-500 text-blue-900"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    {visa}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Step 3: Tax Year */}
-            {step === 3 && (
-              <div className="space-y-3">
-                {["2025", "2024", "2023"].map(year => (
-                  <button
-                    key={year}
-                    onClick={() => {
-                      setProfile(prev => ({ ...prev, taxYear: year }));
-                      handleNext();
-                    }}
-                    className={`w-full text-left px-4 py-3 rounded-lg border-2 transition font-medium ${
-                      profile.taxYear === year
-                        ? "bg-blue-50 border-blue-500 text-blue-900"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    {year}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Step 4: State */}
-            {step === 4 && (
-              <div className="grid grid-cols-3 gap-2">
-                {STATES.map(state => (
-                  <button
-                    key={state}
-                    onClick={() => {
-                      setProfile(prev => ({ ...prev, state }));
-                      handleNext();
-                    }}
-                    className={`px-3 py-2 rounded-lg border-2 transition font-medium ${
-                      profile.state === state
-                        ? "bg-blue-50 border-blue-500 text-blue-900"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    {state}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Step 5: Income Sources */}
-            {step === 5 && (
-              <div className="space-y-4">
-                {INCOME_OPTIONS.map(option => (
-                  <div key={option.value} className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-                    onClick={() => updateIncomeSources(option.value)}
-                  >
-                    <Checkbox
-                      checked={profile.incomeSources.includes(option.value)}
-                      onChange={() => {}}
-                    />
-                    <label className="flex-1 cursor-pointer font-medium text-slate-900">
-                      {option.label}
-                    </label>
-                  </div>
-                ))}
-                {profile.incomeSources.length === 0 && (
-                  <p className="text-sm text-slate-500 italic">Select at least one income source</p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Navigation */}
-        <div className="flex gap-4 mt-8">
-          <Button
-            variant="outline"
-            onClick={handlePrev}
-            disabled={step === 1}
-            className="gap-2"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back
-          </Button>
-          <div className="flex-1" />
-          {step < 5 ? (
-            <Button
-              onClick={handleNext}
-              disabled={
-                (step === 1 && !profile.country) ||
-                (step === 2 && !profile.visaType) ||
-                (step === 4 && !profile.state)
-              }
-              className="gap-2"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          ) : (
-            <Button
-              onClick={handleFinish}
-              disabled={profile.incomeSources.length === 0}
-              className="gap-2 bg-green-600 hover:bg-green-700"
-            >
-              Get My Guide
-              <ChevronRight className="w-4 h-4" />
-            </Button>
+            </div>
           )}
         </div>
 
-        {/* Summary */}
-        <div className="mt-8 p-4 bg-white rounded-lg border border-slate-200 text-sm">
-          <p className="text-slate-600">
-            <strong>Summary:</strong> {profile.country || "Country"} • {profile.visaType || "Visa"} • {profile.taxYear} • {profile.state || "State"} • {profile.incomeSources.length > 0 ? profile.incomeSources.join(", ") : "Income"}
-          </p>
+        <div className="flex justify-between mt-6">
+          <button
+            onClick={() => setStep((s) => s - 1)}
+            disabled={step === 1}
+            className="flex items-center gap-1 px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Back
+          </button>
+          <button
+            onClick={handleNext}
+            disabled={!canAdvance()}
+            className="flex items-center gap-1 px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+          >
+            {step === TOTAL_STEPS ? "See My Guide" : "Next"}
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>
