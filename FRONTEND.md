@@ -36,18 +36,19 @@ npm run dev
 ```
 app/
 ├── page.jsx              ← Landing page
+├── layout.jsx
+├── global.css      
 ├── onboarding/
-│   └── page.jsx          ← 5-question form      
+│   └── page.jsx          ← 5-question form       
 └── results/
-    └── page.jsx          ← Results + AI chat  
+    └── page.jsx          ← Results + AI chat
 
-components/
-├── badge.tsx              
-├── button.tsx  
-├── card.tsx  
-├── checkbox.tsx  
+components/ui
+├── badge.tsx                     
+├── button.tsx
+├── card.tsx
+├── checkbox.tsx
 └── progress.tsx
-
 ```
 ---
 
